@@ -1,0 +1,107 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/Shopify/sarama"
+	cluster "github.com/bsm/sarama-cluster"
+)
+
+type KafkaSection struct {
+	Brokers       []string
+	Topic         []string
+	Group         string
+	SASLEnable    bool
+	SASLUser      string
+	SASLPassword  string
+	ClientVersion string
+}
+
+type RecAdmsg struct {
+	FlushTime string
+	SaveAdMsg map[uint64]AdMsg
+}
+
+type AdMsg struct {
+	AdId       uint64 `json:"ad_id"`
+	CustomerId uint64 `json:"customer_id"`
+	UpdateTime string `json:"update_time"`
+}
+
+func main() {
+
+	kafka := KafkaSection{
+
+		[]string{"ads-b002.kafka.data.sina.com.cn:9110",
+			"ads-b008.kafka.data.sina.com.cn:9110",
+			"ads-c024.kafka.data.sina.com.cn:9110",
+			"ads-a005.kafka.data.sina.com.cn:9110",
+			"ads-c005.kafka.data.sina.com.cn:9110",
+			"ads-a008.kafka.data.sina.com.cn:9110"},
+		[]string{"wb_ad_sfstbid_noconsume"},
+		"abaci-test",
+		true,
+		"adEngine",
+		"bc5007d7935305b583fab9c93949dc82",
+		"1.1.1",
+	}
+	var err error
+
+	kfkEnv := cluster.NewConfig()
+	kfkEnv.Consumer.Return.Errors = true
+	kfkEnv.Group.Return.Notifications = true
+	kfkEnv.Net.SASL.Enable = kafka.SASLEnable
+	kfkEnv.Net.SASL.User = kafka.SASLUser
+	kfkEnv.Net.SASL.Password = kafka.SASLPassword
+	kfkEnv.Config.Version, err = sarama.ParseKafkaVersion(kafka.ClientVersion)
+
+	if err != nil {
+		fmt.Printf("kafka Consumer Version Unknown Error:%s", err.Error())
+		panic(err)
+	}
+
+	consumer, err := cluster.NewConsumer(
+		kafka.Brokers,
+		kafka.Group,
+		kafka.Topic,
+		kfkEnv)
+	if err != nil {
+		fmt.Printf("kafka NewConsumer Error:%s", err.Error())
+		panic(err)
+	}
+	defer func() {
+		if consumeErr := consumer.Close(); nil != consumeErr {
+			fmt.Printf("consumer.Close(), err: %s", consumeErr.Error())
+		}
+	}()
+
+	r := RecAdmsg{}
+
+	select {
+	case msg, more := <-consumer.Messages():
+		if !more {
+			fmt.Println("kafka custome is ended")
+		}
+
+		err := json.Unmarshal(msg.Value, &r)
+		if err != nil {
+			fmt.Printf("the json marshal err: %s", err.Error())
+		}
+		fmt.Printf("FlushTime:%s ", r.FlushTime)
+
+		num := 0
+		for k, v := range r.SaveAdMsg {
+			if num < 10 {
+				fmt.Println(k)
+				fmt.Printf("adid: %s, customerid: %s", v.AdId, v.CustomerId)
+				num += 1
+			}
+		}
+	case err, more := <-consumer.Errors():
+		if more {
+			fmt.Printf("kafkaConsumer consumer Error:%s", err.Error())
+		}
+
+	}
+
+}
